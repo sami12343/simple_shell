@@ -1,89 +1,150 @@
-#include "shell.h"
+#include "main.h"
 
 /**
- * sig_handler - checks if Ctrl C is pressed
- * @sig_num: int
+ * shell - simple shell
+ * @build: input build
  */
-void sig_handler(int sig_num)
+void shell(config *build)
 {
-	if (sig_num == SIGINT)
+	while (true)
 	{
-		_puts("\n#cisfun$ ");
+		checkAndGetLine(build);
+		if (splitString(build) == false)
+			continue;
+		if (findBuiltIns(build) == true)
+			continue;
+		checkPath(build);
+		forkAndExecute(build);
 	}
 }
 
 /**
-* _EOF - handles the End of File
-* @len: return value of getline function
-* @buff: buffer
+ * checkAndGetLine - check stdin and retrieves next line; handles
+ * prompt display
+ * @build: input build
  */
-void _EOF(int len, char *buff)
+void checkAndGetLine(config *build)
 {
-	(void)buff;
-	if (len == -1)
-	{
-		if (isatty(STDIN_FILENO))
-		{
-			_puts("\n");
-			free(buff);
-		}
-		exit(0);
-	}
-}
-/**
-  * _isatty - verif if terminal
-  */
+	register int len;
+	size_t bufferSize = 0;
+	char *ptr, *ptr2;
 
-void _isatty(void)
-{
+	build->args = NULL;
+	build->envList = NULL;
+	build->lineCounter++;
 	if (isatty(STDIN_FILENO))
-		_puts("#cisfun$ ");
-}
-/**
- * main - Shell
- * Return: 0 on success
- */
-
-int main(void)
-{
-	ssize_t len = 0;
-	char *buff = NULL, *value, *pathname, **arv;
-	size_t size = 0;
-	list_path *head = '\0';
-	void (*f)(char **);
-
-	signal(SIGINT, sig_handler);
-	while (len != EOF)
+		displayPrompt();
+	len = getline(&build->buffer, &bufferSize, stdin);
+	if (len == EOF)
 	{
-		_isatty();
-		len = getline(&buff, &size, stdin);
-		_EOF(len, buff);
-		arv = splitstring(buff, " \n");
-		if (!arv || !arv[0])
-			execute(arv);
-		else
+		freeMembers(build);
+		if (isatty(STDIN_FILENO))
+			displayNewLine();
+		if (build->errorStatus)
+			exit(build->errorStatus);
+		exit(EXIT_SUCCESS);
+
+	}
+	ptr = _strchr(build->buffer, '\n');
+	ptr2 = _strchr(build->buffer, '\t');
+	if (ptr || ptr2)
+		insertNullByte(build->buffer, len - 1);
+	stripComments(build->buffer);
+}
+
+/**
+ * stripComments - remove comments from input string
+ * @str: input string
+ * Return: length of remaining string
+ */
+void stripComments(char *str)
+{
+	register int i = 0;
+	_Bool notFirst = false;
+
+	while (str[i])
+	{
+		if (i == 0 && str[i] == '#')
 		{
-			value = _getenv("PATH");
-			head = linkpath(value);
-			pathname = _which(arv[0], head);
-			f = checkbuild(arv);
-			if (f)
+			insertNullByte(str, i);
+			return;
+		}
+		if (notFirst)
+		{
+			if (str[i] == '#' && str[i - 1] == ' ')
 			{
-				free(buff);
-				f(arv);
-			}
-			else if (!pathname)
-				execute(arv);
-			else if (pathname)
-			{
-				free(arv[0]);
-				arv[0] = pathname;
-				execute(arv);
+				insertNullByte(str, i);
+				return;
 			}
 		}
+		i++;
+		notFirst = true;
 	}
-	free_list(head);
-	freearv(arv);
-	free(buff);
-	return (0);
+}
+
+/**
+ * forkAndExecute - fork current build and execute processes
+ * @build: input build
+ */
+void forkAndExecute(config *build)
+{
+	int status;
+	pid_t f1 = fork();
+
+	convertLLtoArr(build);
+	if (f1 == -1)
+	{
+		perror("error\n");
+		freeMembers(build);
+		freeArgs(build->envList);
+		exit(1);
+	}
+	if (f1 == 0)
+	{
+		if (execve(build->fullPath, build->args, build->envList) == -1)
+		{
+			errorHandler(build);
+			freeMembers(build);
+			freeArgs(build->envList);
+			if (errno == ENOENT)
+				exit(127);
+			if (errno == EACCES)
+				exit(126);
+		}
+	} else
+	{
+		wait(&status);
+		if (WIFEXITED(status))
+			build->errorStatus = WEXITSTATUS(status);
+		freeArgsAndBuffer(build);
+		freeArgs(build->envList);
+	}
+}
+
+/**
+ * convertLLtoArr - convert linked list to array
+ * @build: input build
+ */
+void convertLLtoArr(config *build)
+{
+	register int i = 0;
+	size_t count = 0;
+	char **envList = NULL;
+	linked_l *tmp = build->env;
+
+	count = list_len(build->env);
+	envList = malloc(sizeof(char *) * (count + 1));
+	if (!envList)
+	{
+		perror("Malloc failed\n");
+		exit(1);
+	}
+	while (tmp)
+	{
+		envList[i] = _strdup(tmp->string);
+		tmp = tmp->next;
+		i++;
+	}
+	envList[i] = NULL;
+	build->envList = envList;
 }
